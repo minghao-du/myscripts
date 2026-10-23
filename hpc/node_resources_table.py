@@ -3,7 +3,9 @@
 
 Run on the login node: python3 node_resources_table.py
 Requires Python 3.6+ and scontrol on PATH. No SSH or companion script needed.
-Memory is displayed in GiB, using Slurm configured minus allocated memory.
+FREE_CPU = CPUTot - CPUAlloc; FREE_GiB = (RealMemory - AllocMem) / 1024
+(minimum 0). These subtract Slurm allocations, not measured CPU or memory
+usage: a job allocated 8 GiB counts as 8 GiB even if it uses only 2.6 GiB.
 """
 
 import datetime

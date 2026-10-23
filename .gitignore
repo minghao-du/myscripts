@@ -1,0 +1,66 @@
+# ==========================================
+# Operating System
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# ==========================================
+# IDEs and Editors
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==========================================
+# Python / Virtual Environments
+# ==========================================
+__pycache__/
+*.py[cod]
+.venv/
+ISSUE-*.md
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# ==========================================
+# HPC / Cluster Logs
+# ==========================================
+*.log
+slurm-*.out
+slurm-*.err
+
+# ==========================================
+# Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# Tiered Data Hygiene (pc-pipeline-snakemake & AGENTS.md)
+.snakemake/
+/data/*
+!/data/README.md
+/processed/
+/results/
+/logs/
+/_ignore/
+summary/**/smoke/
+
+# paper-craft search cache
+.paper-craft/cache/
+
+# Fleet conductor & slot orchestration
+.epic-*
+.conductor-session
+.spawn-prompts/
+.holds/
+.preserved/
+
