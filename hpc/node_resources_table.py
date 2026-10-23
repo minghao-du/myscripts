@@ -1,14 +1,101 @@
 #!/usr/bin/env python3
-"""Show HPC node resources as a terminal table using the deployed JSON query.
+"""Show cpu64/cpu128 node resources as a terminal table on the HPC.
 
-Run locally: python3 node_resources_table.py [--host zju_hpc_jump]
-Requires SSH access and ~/.local/lib/zju-hpc/node_resources.py on the HPC.
+Run on the login node: python3 node_resources_table.py
+Requires Python 3.6+ and scontrol on PATH. No SSH or companion script needed.
+Memory is displayed in GiB, using Slurm configured minus allocated memory.
 """
 
-import argparse
-import json
+import datetime
+import os
+import re
 import subprocess
 import sys
+
+
+PARTITIONS = ("cpu64", "cpu128")
+
+
+def records(output):
+    for line in output.splitlines():
+        if line.strip():
+            yield dict(re.findall(
+                r"(?:^|\s)([A-Za-z][A-Za-z0-9_]*)=(.*?)(?=\s+[A-Za-z][A-Za-z0-9_]*=|$)",
+                line,
+            ))
+
+
+def number(record, key):
+    value = int(record[key])
+    if value < 0:
+        raise ValueError("Invalid {} for {}".format(key, record.get("NodeName")))
+    return value
+
+
+def build_report(node_output, partition_output):
+    partition_states = {r["PartitionName"]: r["State"]
+                        for r in records(partition_output)}
+    for partition in PARTITIONS:
+        if partition not in partition_states:
+            raise ValueError("Missing partition: " + partition)
+    nodes = []
+    seen = set()
+    for record in records(node_output):
+        memberships = sorted(set(record.get("Partitions", "").split(",")) & set(PARTITIONS))
+        if not memberships:
+            continue
+        name = record["NodeName"]
+        if name in seen:
+            raise ValueError("Duplicate node: " + name)
+        seen.add(name)
+        total_cpus = number(record, "CPUTot")
+        allocated_cpus = number(record, "CPUAlloc")
+        total_memory = number(record, "RealMemory")
+        allocated_memory = number(record, "AllocMem")
+        unallocated_cpus = max(0, total_cpus - allocated_cpus)
+        unallocated_memory = max(0, total_memory - allocated_memory)
+        state = record["State"]
+        # Conservative candidate flag: preserve flags such as DRAIN, RESERVED,
+        # MAINT and NOT_RESPONDING, rather than claiming these nodes are usable.
+        candidate = (state in {"IDLE", "MIXED"}
+                     and any(partition_states[p] == "UP" for p in memberships)
+                     and unallocated_cpus > 0 and unallocated_memory > 0)
+        nodes.append({
+            "node": name,
+            "partitions": memberships,
+            "state": state,
+            "reason": record.get("Reason"),
+            "total_cpus": total_cpus,
+            "allocated_cpus": allocated_cpus,
+            "unallocated_cpus": unallocated_cpus,
+            "total_memory_mib": total_memory,
+            "allocated_memory_mib": allocated_memory,
+            "unallocated_memory_mib": unallocated_memory,
+            "resource_candidate": candidate,
+        })
+    return {
+        "schema_version": 1,
+        "queried_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "partition_states": {p: partition_states[p] for p in PARTITIONS},
+        "note": "Unallocated = configured minus allocated, clamped to zero. "
+                "resource_candidate is a conservative state/resource filter, not a scheduling guarantee. "
+                "Reservations, specialized resources, account/QOS limits, partition limits and queue "
+                "priority can further restrict allocation. Only account-visible records are included.",
+        "nodes": sorted(nodes, key=lambda node: node["node"]),
+    }
+
+
+def query(kind):
+    env = {k: v for k, v in os.environ.items() if k != "SLURM_CLUSTERS"}
+    env["LC_ALL"] = "C"
+    result = subprocess.run(
+        ["scontrol", "--local", "--all", "--oneliner", "show", kind],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        universal_newlines=True, check=True, timeout=30,
+    )
+    if result.stderr.strip():
+        print(result.stderr.strip(), file=sys.stderr)
+    return result.stdout
 
 
 def print_table(report):
@@ -40,24 +127,16 @@ def print_table(report):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="zju_hpc_jump", help="SSH host alias (default: zju_hpc_jump)")
-    args = parser.parse_args()
-    if args.host.startswith("-"):
-        parser.error("host must be an SSH hostname or alias")
+    if len(sys.argv) != 1:
+        print(__doc__, file=sys.stderr)
+        return 2
     try:
-        result = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", args.host,
-             'LC_ALL=C bash -lc "python3 ~/.local/lib/zju-hpc/node_resources.py"'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            universal_newlines=True, check=True, timeout=120,
-        )
-        report = json.loads(result.stdout)
-        print_table(report)
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        report = build_report(query("nodes"), query("partitions"))
+    except (OSError, KeyError, ValueError, subprocess.SubprocessError) as exc:
         detail = getattr(exc, "stderr", None) or str(exc)
         print("Node resource query failed: " + detail.strip(), file=sys.stderr)
         return 1
+    print_table(report)
     return 0
 
 
